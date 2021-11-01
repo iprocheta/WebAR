@@ -1,146 +1,78 @@
-// Generic definitions - variables
+async function activateXR() {
+  // Add a canvas element and initialize a WebGL context that is compatible with WebXR.
+  const canvas = document.createElement("canvas");
+  document.body.appendChild(canvas);
+  const gl = canvas.getContext("webgl", {xrCompatible: true});
 
-var WIDTH = document.body.clientWidth, HEIGHT = document.body.clientHeight;
+  // To be continued in upcoming steps.
+  const scene = new THREE.Scene();
 
-var lockOrientation = screen.orientation.lock || screen.lockOrientation
-                   || screen.mozLockOrientation || screen.msLockOrientation;
+// The cube will have a different color on each side.
+  const materials = [
+    new THREE.MeshBasicMaterial({color: 0xff0000}),
+    new THREE.MeshBasicMaterial({color: 0x0000ff}),
+    new THREE.MeshBasicMaterial({color: 0x00ff00}),
+    new THREE.MeshBasicMaterial({color: 0xff00ff}),
+    new THREE.MeshBasicMaterial({color: 0x00ffff}),
+    new THREE.MeshBasicMaterial({color: 0xffff00})
+  ];
 
-navigator.getMedia = ( navigator.getUserMedia ||
-                       navigator.webkitGetUserMedia ||
-                       navigator.mozGetUserMedia ||
-                       navigator.msGetUserMedia);
+  // Create the cube and add it to the demo scene.
+  const cube = new THREE.Mesh(new THREE.BoxBufferGeometry(0.2, 0.2, 0.2), materials);
+  cube.position.set(1, 1, 1);
+  scene.add(cube);
 
-window.addEventListener("compassneedscalibration", function(event) {
-  self.supported = true;
-  alert('Your compass needs calibrating!');
-  event.preventDefault();
-}, true);
+  // Set up the WebGLRenderer, which handles rendering to the session's base layer.
+  const renderer = new THREE.WebGLRenderer({
+    alpha: true,
+    preserveDrawingBuffer: true,
+    canvas: canvas,
+    context: gl
+  });
+  renderer.autoClear = false;
 
-if(!navigator.getMedia) {
-  alert("Oh noes! Your browser does not support webcam video :(");
-}
+  // The API directly updates the camera matrices.
+  // Disable matrix auto updates so three.js doesn't attempt
+  // to handle the matrices independently.
+  const camera = new THREE.PerspectiveCamera();
+  camera.matrixAutoUpdate = false;
 
-var scene = new THREE.Scene(),
-    camera = new THREE.PerspectiveCamera(75, WIDTH / HEIGHT, 0.1, 1000),
-    renderer = new THREE.WebGLRenderer({ alpha: true }),
-    light, geometry, north, south, east, west, ctx,
-    canvas = document.getElementById("camera"),
-    video  = document.querySelector("video"),
-    button = document.querySelector("button");
+  // Initialize a WebXR session using "immersive-ar".
+  const session = await navigator.xr.requestSession("immersive-ar");
+  session.updateRenderState({
+    baseLayer: new XRWebGLLayer(session, gl)
+  });
 
-// Generic definitions functions
+  // A 'local' reference space has a native origin that is located
+  // near the viewer's position at the time the session was created.
+  const referenceSpace = await session.requestReferenceSpace('local');
 
-function deg2rad(angle) {
-  return (angle / 180.0) * Math.PI;
-}
+  // Create a render loop that allows us to draw on the AR view.
+  const onXRFrame = (time, frame) => {
+    // Queue up the next draw request.
+    session.requestAnimationFrame(onXRFrame);
 
-function draw() {
-  ctx.fillStyle = "#ff00ff";
-  ctx.fillRect(0,0,WIDTH,HEIGHT);
-  ctx.drawImage(video, 0, 0, WIDTH, HEIGHT);
+    // Bind the graphics framebuffer to the baseLayer's framebuffer
+    gl.bindFramebuffer(gl.FRAMEBUFFER, session.renderState.baseLayer.framebuffer)
 
-  north.rotation.y += 0.05;
-  south.rotation.y += 0.05;
+    // Retrieve the pose of the device.
+    // XRFrame.getViewerPose can return null while the session attempts to establish tracking.
+    const pose = frame.getViewerPose(referenceSpace);
+    if (pose) {
+      // In mobile AR, we only have one view.
+      const view = pose.views[0];
 
-  east.rotation.y += 0.05;
-  west.rotation.y += 0.05;
+      const viewport = session.renderState.baseLayer.getViewport(view);
+      renderer.setSize(viewport.width, viewport.height)
 
-  renderer.render(scene, camera);
-  requestAnimationFrame(draw);
-}
+      // Use the view's transform matrix and projection matrix to configure the THREE.camera.
+      camera.matrix.fromArray(view.transform.matrix)
+      camera.projectionMatrix.fromArray(view.projectionMatrix);
+      camera.updateMatrixWorld(true);
 
-function showWebcamVideo(sourceId) {
-  navigator.getMedia({
-    video: {
-      optional: [{sourceId: sourceId}]
+      // Render the scene with THREE.WebGLRenderer.
+      renderer.render(scene, camera)
     }
-  }, function onSuccess(stream) {
-    var video = document.querySelector('video');
-    video.src = window.URL.createObjectURL(stream);
-  }, function onError(err) {
-    alert("Whoops: " + err);
-    console.error(err);
-  });
+  }
+  session.requestAnimationFrame(onXRFrame);
 }
-
-function updateOrientation(e) {
-  var heading = e.alpha,
-      pitch   = e.gamma;
-
-  // Correcting the sensors being "clever"
-  if(Math.abs(e.beta) > 45) {
-    heading += 90;
-  } else {
-    heading -= 90;
-  }
-
-  if(pitch < 0) {
-    pitch = -90 - pitch;
-  } else {
-    pitch =  90 - pitch;
-  }
-
-  if(heading < 0) heading = 360 + heading;
-
-  camera.rotation.set(deg2rad(pitch), deg2rad(heading), 0);
-  event.preventDefault();
-}
-
-// Initialisiation and run!
-
-camera.eulerOrder = 'YXZ'; // We want to rotate around the Y axis first or our perspective is screwed up
-
-light = new THREE.PointLight(0xffffff, 1, 100);
-scene.add(light);
-
-geometry = new THREE.BoxGeometry(10, 10, 10);
-north = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0xff0000}));
-south = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0x00ff00}));
-east  = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0x0000ff}));
-west  = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0xffff00}));
-
-north.position.set(0, 0, -50);
-south.position.set(0, 0,  50);
-
-east.position.set( 50, 0, 0);
-west.position.set(-50, 0, 0);
-
-scene.add(north);
-scene.add(east);
-scene.add(south);
-scene.add(west);
-
-window.addEventListener("deviceorientation", updateOrientation);
-
-button.addEventListener("click", function() {
-  canvas.className = "";
-
-  if(document.body.webkitRequestFullscreen) document.body.webkitRequestFullscreen();
-  else if (document.body.mozRequestFullScreen) document.body.mozRequestFullScreen();
-
-  document.body.removeChild(document.getElementById("instructions"));
-
-  document.body.appendChild(renderer.domElement);
-  renderer.setSize(WIDTH, HEIGHT);
-
-  if(screen.orientation.lock && !screen.orientation.lock('landscape-primary')) {
-    alert("Please put your phone in landscape mode for this demo");
-  } else if(screen.lockOrientation && !screen.lockOrientation('landscape-primary')) {
-    alert("Please put your phone in landscape mode for this demo");
-  }
-
-  canvas.width = WIDTH;
-  canvas.height = HEIGHT;
-
-  ctx = canvas.getContext("2d");
-
-  MediaStreamTrack.getSources(function(mediaSources) {
-    mediaSources.forEach(function(mediaSource){
-      if (mediaSource.kind === 'video' && mediaSource.facing == "environment") {
-        showWebcamVideo(mediaSource.id);
-      }
-    });
-  });
-
-  draw();
-});
